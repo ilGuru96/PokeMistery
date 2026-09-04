@@ -64,6 +64,22 @@ const modal = (html) => {
 
 const closeModal = () => $("modal")?.classList.add("hidden");
 
+// Test2 usa il Bottom Campagna come arena, senza aprire una finestra modale.
+const showBattleSurface = (html) => {
+  if(PKM_RUN?.mode === "test2"){
+    const bottom = $("bottomContainer");
+    if(bottom){
+      const arena = PokeMisteryRL.UI?.buildTest2ArenaTemplate?.() || html;
+      // Il fight è il Bottom Campagna stesso, senza una scena o un pannello aggiuntivo.
+      bottom.innerHTML = arena;
+      $("modal")?.classList.add("hidden");
+      return true;
+    }
+  }
+  modal(html);
+  return false;
+};
+
 document.addEventListener("click", (e) => {
   const box = $("modal");
 
@@ -96,10 +112,10 @@ const log = (text, cls = "") => {
     const gameBox = $("gameBox"), bottom = $("bottomContainer"), mapWrap = document.querySelector(".map-wrap");
     if (gameBox && bottom && mapWrap &&!gameBox.contains(bottom)) gameBox.appendChild(bottom);
   };
-  return { $, clamp, rand, sprite, fmt, fmtIV, msg, modal, closeModal, log, ensureBoxStructure };
+  return { $, clamp, rand, sprite, fmt, fmtIV, msg, modal, closeModal, showBattleSurface, log, ensureBoxStructure };
 })();
 
-const { $, clamp, rand, sprite, fmt, fmtIV, msg, modal, closeModal, log } = PokeMisteryRL.Helpers;
+const { $, clamp, rand, sprite, fmt, fmtIV, msg, modal, closeModal, showBattleSurface, log } = PokeMisteryRL.Helpers;
 let runLogOpen = false;
 const toggleRunLog = () => {
   runLogOpen = !runLogOpen;
@@ -142,6 +158,45 @@ window.showRecruitmentPrompt = (
     !PKM_RUN?.secondActive;
 
   if(freeSlot){
+
+    // In Test2 il reclutamento è un evento della scena: il candidato appare
+    // nell'arena e la mappa diventa temporaneamente la scelta del giocatore.
+    if(isTest2Mode()){
+      const bottom = $("bottomCampagna");
+      const map = $("map");
+      if(bottom){
+        bottom.classList.add("test2-recruit-scene");
+        bottom.querySelectorAll(".bottom-campagna-member.member-2, .bottom-campagna-member.member-3")
+          .forEach(member => member.classList.add("recruit-scene-ally", "recruit-scene-source"));
+        bottom.querySelector(".test2-recruit-candidate")?.remove();
+        bottom.querySelector(".test2-recruit-allies")?.remove();
+        bottom.insertAdjacentHTML("beforeend", `
+          <div class="test2-recruit-allies" aria-label="Squadra presente">
+            ${PKM_RUN?.activePokemon ? `<div class="test2-recruit-ally s1"><img src="${sprite(PKM_RUN.activePokemon.immagine)}" alt="${PKM_RUN.activePokemon.nome}"></div>` : ""}
+            ${PKM_RUN?.secondActive ? `<div class="test2-recruit-ally s2"><img src="${sprite(PKM_RUN.secondActive.immagine)}" alt="${PKM_RUN.secondActive.nome}"></div>` : ""}
+          </div>
+          <div class="test2-recruit-candidate" aria-label="${pokemon.nome}">
+            <img src="${sprite(pokemon.immagine)}" alt="${pokemon.nome}">
+          </div>
+        `);
+      }
+      if(map){
+        map.classList.add("test2-recruit-choice");
+        map.innerHTML = `
+          <div class="test2-recruit-choice-card">
+            <span class="test2-recruit-eyebrow">INCONTRO SUL PERCORSO</span>
+            <div class="test2-recruit-dialogue-mark">!</div>
+            <h2><b>${pokemon.nome}</b> vorrebbe partecipare alla tua squadra</h2>
+            <p>Vuoi accoglierlo nel gruppo?</p>
+            <div>
+              <button type="button" class="test2-recruit-accept" onclick="window.acceptRecruitment()">✓ ACCETTA</button>
+              <button type="button" class="test2-recruit-reject" onclick="window.rejectRecruitment()">RIFIUTA</button>
+            </div>
+          </div>
+        `;
+      }
+      return;
+    }
 
     modal(`
       <div class="center recruitment-offer">
@@ -363,6 +418,10 @@ window.acceptRecruitment = () => {
 
   window._pendingRecruitment = null;
 
+  if(isTest2Mode()){
+    window.finishTest2RecruitmentChoice(`${name} è entrato nella squadra.`);
+    return;
+  }
   PokeMisteryRL.UI.refreshBottomPanel();
   window.next(`${name} è entrato nella squadra.`);
 };
@@ -379,7 +438,25 @@ window.rejectRecruitment = () => {
   window._pendingRecruitment = null;
   window._pendingReplacement = null;
   // Il rifiuto non interrompe più il flusso con una schermata separata.
+  if(isTest2Mode()){
+    window.finishTest2RecruitmentChoice("Vittoria!");
+    return;
+  }
   window.next("Vittoria!");
+};
+
+// Dopo la decisione, il candidato svanisce e S1/S2 attraversano il tratto.
+window.finishTest2RecruitmentChoice = (message) => {
+  const bottom = $("bottomCampagna");
+  if(!bottom || !isTest2Mode()){
+    window.next(message);
+    return;
+  }
+  if(bottom.dataset.recruitLeaving === "1") return;
+  bottom.dataset.recruitLeaving = "1";
+  bottom.querySelector(".test2-recruit-candidate")?.remove();
+  bottom.classList.add("test2-node-finish");
+  setTimeout(() => window.next(message), 1060);
 };
 
 // #endregion
@@ -424,6 +501,15 @@ const { getPokemonTypes, getTypeMultiplier, getMultLabel, getTypingBadge } = Pok
 // #region 04 - DATABASE POKEMON - LOADER FIX PER DB_PKM SENZA.js
 PokeMisteryRL.Database = (() => {
   const PKM_DB = {};
+  const POKEAPI_BASE = "https://pokeapi.co/api/v2";
+  const POKEAPI_CACHE_KEY = "pokeMisteryRL.pokeapi.kanto.v1";
+  const italianType = {
+    normal:"normale", fire:"fuoco", water:"acqua", electric:"elettro",
+    grass:"erba", ice:"ghiaccio", fighting:"lotta", poison:"veleno",
+    ground:"terra", flying:"volante", psychic:"psico", bug:"coleottero",
+    rock:"roccia", ghost:"spettro", dragon:"drago", dark:"buio",
+    steel:"acciaio", fairy:"folletto"
+  };
 
   function normalizePokemonDatabase() {
     const source = window.PKM_ALL || window.DB_PKM || {};
@@ -459,6 +545,78 @@ PokeMisteryRL.Database = (() => {
 
   const getPokemon = (id) => PKM_DB[Number(id)] || null;
   const getPokemonId = (value) => { var id=Number(value); return PKM_DB[id]? id : null; };
+
+  // PokéAPI è la fonte live dei dati canonici. Il DB locale conserva soltanto
+  // campi di design della run che l'API non conosce (stage ed evoluzioni).
+  const applyLivePokemon = data => {
+    const id = Number(data?.id);
+    if(!id || !PKM_DB[id]) return null;
+    const current = PKM_DB[id];
+    const bst = (data.stats || []).reduce((sum, entry) => sum + (Number(entry?.base_stat) || 0), 0);
+    PKM_DB[id] = {
+      ...current,
+      nome: current.nome || String(data.name || "Pokémon"),
+      immagine: data?.sprites?.front_default || current.immagine,
+      tipi: (data.types || []).sort((a,b) => a.slot - b.slot).map(entry => italianType[entry?.type?.name] || entry?.type?.name).filter(Boolean),
+      bst: bst || current.bst,
+      pokeapi: { id, name:data.name, updatedAt:Date.now() }
+    };
+    return PKM_DB[id];
+  };
+
+  const readLiveCache = () => {
+    try { return JSON.parse(localStorage.getItem(POKEAPI_CACHE_KEY) || "{}"); }
+    catch(_) { return {}; }
+  };
+  const writeLiveCache = cache => {
+    try { localStorage.setItem(POKEAPI_CACHE_KEY, JSON.stringify(cache)); }
+    catch(_) { /* cache opzionale */ }
+  };
+
+  const loadPokeApiLiveDatabase = async () => {
+    if(window.__pokeApiLoading || window.__pokeApiReady) return PKM_DB;
+    window.__pokeApiLoading = true;
+    const cache = readLiveCache();
+    const ids = Object.keys(PKM_DB).map(Number).filter(id => id > 0 && id <= 151);
+    let changed = false;
+    for(let start = 0; start < ids.length; start += 6){
+      const group = ids.slice(start, start + 6);
+      await Promise.all(group.map(async id => {
+        const cached = cache[id];
+        if(cached?.data && Date.now() - Number(cached.savedAt || 0) < 1000 * 60 * 60 * 24 * 7){
+          if(applyLivePokemon(cached.data)) changed = true;
+          return;
+        }
+        try {
+          const response = await fetch(`${POKEAPI_BASE}/pokemon/${id}`);
+          if(!response.ok) return;
+          const data = await response.json();
+          cache[id] = { savedAt:Date.now(), data };
+          if(applyLivePokemon(data)) changed = true;
+        } catch(_) { /* il DB locale resta il fallback offline */ }
+      }));
+    }
+    writeLiveCache(cache);
+    window.__pokeApiLoading = false;
+    window.__pokeApiReady = true;
+    if(changed){
+      window.dispatchEvent(new CustomEvent("pokeapi:ready"));
+      if(PKM_RUN && !PKM_RUN.battle) PokeMisteryRL.UI?.render?.();
+    }
+    return PKM_DB;
+  };
+
+  const getPokeApiItem = async id => {
+    const response = await fetch(`${POKEAPI_BASE}/item/${encodeURIComponent(String(id))}`);
+    if(!response.ok) throw new Error("Oggetto PokéAPI non trovato");
+    return response.json();
+  };
+
+  const getPokeApiMove = async id => {
+    const response = await fetch(`${POKEAPI_BASE}/move/${encodeURIComponent(String(id))}`);
+    if(!response.ok) throw new Error("Mossa PokéAPI non trovata");
+    return response.json();
+  };
 
   // AUTO-LOAD DAL CDN - FIX PER NOME FILE SENZA.js
   async function loadRemoteDB() {
@@ -496,7 +654,7 @@ PokeMisteryRL.Database = (() => {
 
   loadRemoteDB();
 
-  return { PKM_DB, buildPokemonDB, getPokemon, getPokemonId, loadRemoteDB };
+  return { PKM_DB, buildPokemonDB, getPokemon, getPokemonId, loadRemoteDB, loadPokeApiLiveDatabase, getPokeApiItem, getPokeApiMove };
 })();
 
 const { PKM_DB, buildPokemonDB, getPokemon, getPokemonId } = PokeMisteryRL.Database;
@@ -674,8 +832,9 @@ const returnPokemonHeldItemsToBag = pokemon => {
 
 // Le due Campagne Test condividono il motore sperimentale, ma restano run separate.
 function isTestCampaign(){
-  return PKM_RUN?.mode === "test";
+  return ["test", "test2"].includes(PKM_RUN?.mode);
 }
+function isTest2Mode(){ return PKM_RUN?.mode === "test2"; }
 
 // Carte Test: ogni effetto vale solo per le mosse del typing indicato.
 PokeMisteryRL.TypeCards = (() => {
@@ -1450,7 +1609,11 @@ PokeMisteryRL.Map = (() => {
 
     // La modalità Test usa gli scenari Camp: il sorteggio viene salvato
     // nella run, quindi lo sfondo non cambia a ogni ridisegno della mappa.
-    if(isTestCampaign()){
+    if(isTest2Mode()){
+      // Le due finestre della mappa (1/2/3 e 3/2/1) condividono lo stesso
+      // scenario roccioso, così il cambio rigenera solo i nodi.
+      background = "./img/prove-bosco/BoscoSmeraldo-Map-Orizzontale.png";
+    }else if(isTestCampaign()){
       const currentFloor = Number(PKM_RUN.floor) || 1;
       const maxFloor = Math.max(1, Number(modes?.get?.(PKM_RUN?.mode)?.piani?.length) || 1);
       PKM_RUN.testFloorBackgrounds ||= {};
@@ -1478,12 +1641,28 @@ PokeMisteryRL.Map = (() => {
     PKM_RUN.categoria = floor?.categoria || null;
     wrap.dataset.category = PKM_RUN.categoria || "";
 
+    // In Test2 mappa e bottom sono box separati: lo scenario appartiene
+    // esclusivamente al box mappa, non al contenitore dell'intera schermata.
+    const backgroundTarget = isTest2Mode() && wrap ? wrap : shell;
     if(background){
-      shell.style.backgroundImage =
-        `url("${background}")`;
-      shell.style.backgroundSize = "cover";
-      shell.style.backgroundPosition = "center";
+      const backgroundValue = `url("${background}")`;
+      if(isTest2Mode()){
+        // Il foglio stile generale azzera .map-wrap con !important:
+        // qui lo sfondo del piano deve prevalere solo nella sandbox Test2.
+        backgroundTarget.style.setProperty("background-image", backgroundValue, "important");
+        backgroundTarget.style.setProperty("background-size", "cover", "important");
+        backgroundTarget.style.setProperty("background-position", "center", "important");
+      }else{
+        backgroundTarget.style.backgroundImage = backgroundValue;
+        backgroundTarget.style.backgroundSize = "cover";
+        backgroundTarget.style.backgroundPosition = "center";
+      }
     }else{
+      backgroundTarget.style.removeProperty("background-image");
+      backgroundTarget.style.removeProperty("background-size");
+      backgroundTarget.style.removeProperty("background-position");
+    }
+    if(isTest2Mode() && shell !== backgroundTarget){
       shell.style.removeProperty("background-image");
       shell.style.removeProperty("background-size");
       shell.style.removeProperty("background-position");
@@ -1612,17 +1791,23 @@ PokeMisteryRL.Map = (() => {
     // Ogni riga ha un numero diverso di nodi rispetto alla successiva.
     // La struttura è fissa per evitare righe consecutive uguali.
     // Riga 0 = 1 nodo di partenza, con ESATTAMENTE 3 uscite verso la riga 1.
-    const layout = [1, 3, 4, 5, 3, 2, 1];
+    // Test2 usa una mappa a rombo leggibile: 1 partenza, poi 2/3/4/3/2
+    // scelte, fino al boss. Le altre modalità mantengono la propria mappa.
+    const layout = isTest2Mode()
+      ? [1, 2, 3, 2, 1]
+      : [1, 3, 4, 5, 3, 2, 1];
     PKM_RUN.map = [];
+    if(isTest2Mode()) PKM_RUN.test2MapPhase = 0;
     PKM_RUN.floorChallenges = {};
     PKM_RUN.floorChallengeDone = {};
 
     // Struttura del piano: 2 dojo casuali, 1 negozio fisso al centro
     // della riga da cinque e i due rifugi immediatamente prima del boss.
     const dojoCandidates = [];
+    const shopNodeId = isTest2Mode() ? "r2c1" : "r3c2";
     for(let r = 1; r < layout.length - 2; r++){
       for(let c = 0; c < layout[r]; c++){
-        if(!(r === 3 && c === 2)) dojoCandidates.push(`r${r}c${c}`);
+        if(`r${r}c${c}` !== shopNodeId) dojoCandidates.push(`r${r}c${c}`);
       }
     }
     const dojoNodes = new Set(
@@ -1645,7 +1830,7 @@ PokeMisteryRL.Map = (() => {
           type = "boss";
         } else if (r === layout.length - 2) {
           type = "rifugio";
-        } else if (r === 3 && c === 2) {
+        } else if (`r${r}c${c}` === shopNodeId) {
           type = "shop";
         } else if (dojoNodes.has(`r${r}c${c}`)) {
           type = "skill";
@@ -2050,7 +2235,19 @@ PokeMisteryRL.Progress = (() => {
     typeof fight === "function" ? fight(false) : next();
   };
   const next = (message="") => {
-    if(!PKM_RUN)return; const current=PKM_RUN.map[PKM_RUN.row]?.[PKM_RUN.col]; if(!current)return;
+    if(!PKM_RUN)return;
+    const current=PKM_RUN.map[PKM_RUN.row]?.[PKM_RUN.col]; if(!current)return;
+    // Lo scenario mostrato dopo il nodo è quello della scelta appena fatta,
+    // non quello della prima scelta disponibile nella colonna successiva.
+    if(isTest2Mode()){
+      PKM_RUN.test2Scene = current.type === "skill" ? "dojo"
+        : current.type === "shop" ? "bazar"
+        : current.type === "rifugio" ? "campeggio"
+        : "tunnel";
+    }
+    // Terminata la colonna da tre scelte, Test2 sostituisce visivamente
+    // l'intera finestra della mappa con 3 / 2 / 1.
+    const advanceTest2MapWindow = isTest2Mode() && Number(PKM_RUN.test2MapPhase) !== 2 && Number(PKM_RUN.row) === 2;
     // L'ultimo scontro del passaggio riporta esattamente al nodo ? di origine.
     if(PKM_RUN.extraPassage && current.row === PKM_RUN.map.length - 1 && current.done){
       const passage = PKM_RUN.extraPassage;
@@ -2100,7 +2297,13 @@ PokeMisteryRL.Progress = (() => {
       PKM_RUN.col=first ? first.col : 0;
     }
     else { PKM_RUN.map.forEach(r=>r.forEach(n=>n.ok=false)); const nextRow=PKM_RUN.map[PKM_RUN.row+1]; if(nextRow){ current.kid.forEach(c=>{ if(nextRow[c]) nextRow[c].ok=true; }); if(!nextRow.some(n=>n.ok)) nextRow.forEach(n=>n.ok=true); PKM_RUN.row++; const first=nextRow.find(n=>n.ok); if(first) PKM_RUN.col=first.col; } }
-    if(message) msg(message); closeModal(); busy=0; PokeMisteryRL.UI.render(); checkEvolve();
+    if(advanceTest2MapWindow) PKM_RUN.test2MapPhase = 2;
+    if(message) msg(message); closeModal(); busy=0;
+    // La marcia di fine nodo non deve sopravvivere alla conferma dei premi:
+    // il nuovo tratto riparte con la formazione ferma alle coordinate di sinistra.
+    document.getElementById("bottomCampagna")?.classList.remove("test2-node-finish");
+    PokeMisteryRL.UI.render();
+    checkEvolve();
   };
   return { pick, next, chooseStartingS2, acceptShelterChallenge, rejectShelterChallenge, acceptSkillChallenge, rejectSkillChallenge, chooseBossCompanion, enterHiddenPassage, declineHiddenPassage };
 })();
@@ -3186,7 +3389,7 @@ PokeMisteryRL.Battle = (() => {
           eventFight: node?.type === "event"
         };
         (PokeMisteryRL.Campaigns?.startBattleEffects?.(PKM_RUN.battle) || []).forEach(log);
-        modal(PokeMisteryRL.UI.buildBattleTemplate(isBoss, PKM_RUN.floor));
+        showBattleSurface(PokeMisteryRL.UI.buildBattleTemplate(isBoss, PKM_RUN.floor));
         PokeMisteryRL.UI.updateBattleHP();
         log(
           isBoss ? `⚠️ ${enemies.map(p => p.nome).join(" + ")} BOSS!` : `⚔️ ${enemy.nome} selvatico!`,
@@ -3222,6 +3425,7 @@ PokeMisteryRL.Battle = (() => {
 
   const getBattlePlayers = () => {
     const base = [getStarter1(), getStarter2()];
+    if(isTest2Mode()) return base.filter(Boolean);
     return isTestCampaign()
       ? [...base, ...(PKM_RUN?.teamSlots || [])].filter(Boolean).slice(0, 4)
       : base.filter(Boolean);
@@ -3636,7 +3840,7 @@ PokeMisteryRL.Battle = (() => {
     if(isTestCampaign() && battle.phase === 0 && battle.formationRequested && !battle.formationPending){
       battle.formationRequested = false;
       battle.formationPending = true;
-      modal(PokeMisteryRL.UI.buildBattleTemplate(!!battle.boss, PKM_RUN.floor));
+      showBattleSurface(PokeMisteryRL.UI.buildBattleTemplate(!!battle.boss, PKM_RUN.floor));
       PokeMisteryRL.UI.updateBattleHP();
       return;
     }
@@ -3737,12 +3941,14 @@ PokeMisteryRL.Battle = (() => {
     }
 
     // Evidenzia il combattente che sta per compiere l'azione corrente.
-    document.querySelectorAll("#battleFinal .bf-sprite.is-attacking").forEach(element => element.classList.remove("is-attacking"));
+    document.querySelectorAll("#battleFinal .bf-sprite.is-attacking, #bottomCampagna .is-attacking").forEach(element => element.classList.remove("is-attacking"));
     const playerIndex = getBattlePlayers().indexOf(attacker);
     const enemyIndex = enemies.indexOf(attacker);
     const attackerElement = playerIndex >= 0
-      ? document.querySelector(`#battleFinal [data-battle-player="${playerIndex}"]`)
-      : document.querySelector(`#battleFinal .bf-sprite.enemy-${enemyIndex}`);
+      ? document.querySelector(`[data-battle-player="${playerIndex}"]`)
+      : (isTest2Mode()
+        ? document.querySelector(`#bottomCampagna [data-battle-enemy="${enemyIndex}"]`)
+        : document.querySelector(`#battleFinal .bf-sprite.enemy-${enemyIndex}`));
     attackerElement?.classList.add("is-attacking");
 
 
@@ -4182,6 +4388,16 @@ PokeMisteryRL.Battle = (() => {
     busy = 0;
     PokeMisteryRL.UI.refreshBottomPanel();
 
+    // Il nodo termina qui: in Test2 la formazione lascia il tratto andando
+    // verso destra, quindi solo dopo vengono mostrati premi e scelte.
+    const showNodeReward = (callback) => {
+      if(!isTest2Mode()) return callback();
+      const march = document.getElementById("bottomCampagna");
+      if(!march) return callback();
+      march.classList.add("test2-node-finish");
+      setTimeout(callback, 1060);
+    };
+    showNodeReward(() => {
     if(battle.shelterFight){
       showShelterLevelReward(reward);
       return;
@@ -4232,6 +4448,7 @@ PokeMisteryRL.Battle = (() => {
       (PKM_RUN.teamSlots || []).some(Boolean) ? `Squadra +${battle.boss ? 2 : 1}` : null
     ].filter(Boolean).join(" · ");
     modal(`<div class="center battle-reward"><span>✦ VITTORIA</span><h2>${battle.boss ? "Boss sconfitto!" : "Incontro completato!"}</h2><p>Nessun Pokémon ha chiesto di unirsi alla squadra.</p><div class="battle-reward-grid"><div><small>DENARO</small><b>+${reward}¥</b></div><div><small>LIVELLI</small><b>${levelText}</b></div></div><button type="button" onclick="next('Vittoria!')">CONTINUA</button></div>`);
+    });
   };
 
   // GAME OVER
@@ -4334,7 +4551,7 @@ window.resumeBattleAfterFormation = () => {
   if(!battle?.formationPending) return false;
   battle.formationPending = false;
   battle.formationTurn = battle.turn;
-  modal(PokeMisteryRL.UI.buildBattleTemplate(!!battle.boss, PKM_RUN.floor));
+  showBattleSurface(PokeMisteryRL.UI.buildBattleTemplate(!!battle.boss, PKM_RUN.floor));
   PokeMisteryRL.UI.updateBattleHP();
   setTimeout(() => PokeMisteryRL.Battle.autoTurn(), 120);
   return true;
@@ -4568,6 +4785,45 @@ PokeMisteryRL.UI = (() => {
     </div>
   `;
 
+  // Test2 has its own isolated Campaign bottom: no legacy HUD is reused here.
+  const getTest2SceneForNode = node => {
+    if(node?.type === "skill") return "dojo";
+    if(node?.type === "shop") return "bazar";
+    if(node?.type === "rifugio") return "campeggio";
+    return "tunnel";
+  };
+  const getTest2BottomScene = () => PKM_RUN?.test2Scene || getTest2SceneForNode(PKM_RUN?.map?.[PKM_RUN?.row]?.[PKM_RUN?.col]);
+
+  const bottomTypeBadges = (pokemon) => {
+    const types = getPokemonTypes(pokemon).length
+      ? getPokemonTypes(pokemon)
+      : getPokemonTypes(PKM_DB?.[pokemon?.id]);
+    return types.map(getTypingBadge)
+    .join("");
+  };
+
+  const buildTest2UtilityBar = () => `
+    <nav class="test2-utility-bar" aria-label="Comandi run">
+      <span id="test2FloorReadout" class="test2-utility-floor">${PKM_RUN?.extraPassage ? "PASSAGGIO" : `PIANO ${PKM_RUN?.floor || 1}`}</span>
+      <button type="button" onclick="toggleInventory()" aria-label="Zaino" title="Zaino">🎒</button>
+      <span class="test2-utility-money" title="Soldi">💰 <b id="test2BitsReadout">${Number(PKM_RUN?.bits) || 0}</b></span>
+      <button type="button" onclick="goMenu()" aria-label="Menu" title="Menu">☰</button>
+      <button type="button" class="test2-reset" onclick="quickReset()" aria-label="Ricomincia" title="Ricomincia">↻</button>
+    </nav>
+  `;
+
+  const buildTest2FormationTemplate = () => {
+    const scene = getTest2BottomScene();
+    return `
+    <div id="bottomCampagna" class="bottom-campagna" data-scene="${scene}" aria-label="Formazione squadra">
+      <span class="bottom-campagna-title">SQUADRA</span>
+      ${scene === "bazar" ? `<img class="test2-kecleon" src="${sprite("kecleon.png")}" alt="Kecleon">` : ""}
+      <div id="test2FormationLine" class="bottom-campagna-formation"></div>
+      ${buildTest2UtilityBar()}
+    </div>
+  `;
+  };
+
   const buildBottomPanelTemplate = () => `
 
   <div id="bottomPanel" class="bottom-v8">
@@ -4689,12 +4945,85 @@ PokeMisteryRL.UI = (() => {
       return;
     }
 
+    // Test2 usa una composizione invertita: arena in alto, mappa subito sotto.
+    const shell = document.querySelector(".adventure-shell");
+    const mapWrap = document.querySelector(".map-wrap");
+    const bottom = $("bottomContainer");
+    if(shell && mapWrap && bottom){
+      if(isTest2Mode()){
+        shell.classList.add("test2-layout");
+        if(bottom.nextElementSibling !== mapWrap) shell.insertBefore(bottom, mapWrap);
+      } else if(shell.classList.contains("test2-layout")){
+        shell.classList.remove("test2-layout");
+        if(mapWrap.nextElementSibling !== bottom) shell.appendChild(bottom);
+      }
+    }
+
 
     const p =
       getActivePokemon();
 
 
     if (!p) {
+      return;
+    }
+
+    // Test2 sostituisce del tutto il bottom con una formazione da marcia.
+    if(isTest2Mode()){
+      // Durante lo scontro il bottom è l'arena: non va rimpiazzato dalla formazione.
+      if(PKM_RUN.battle) return;
+      if(!$('bottomCampagna') || $('bottomCampagna')?.classList.contains('test2-fight-bottom')){
+        $('bottomContainer').innerHTML = buildTest2FormationTemplate();
+      }
+      const test2Bottom = $('bottomCampagna');
+      const test2Scene = getTest2BottomScene();
+      if(test2Bottom){
+        // Terminato un nodo, l'arena non conserva avversari o elementi della
+        // fight precedente: restano soltanto S1/S2 e le riserve nei loro box.
+        test2Bottom.classList.remove('test2-fight-bottom');
+        test2Bottom.querySelector('.test2-enemy-formation')?.remove();
+        test2Bottom.querySelector('.test2-shop-kecleon')?.remove();
+        test2Bottom.dataset.scene = test2Scene;
+        const existingKecleon = test2Bottom.querySelector('.test2-kecleon');
+        if(test2Scene === 'bazar' && !existingKecleon){
+          test2Bottom.insertAdjacentHTML('afterbegin', `<img class="test2-kecleon" src="${sprite("kecleon.png")}" alt="Kecleon">`);
+        } else if(test2Scene !== 'bazar'){
+          existingKecleon?.remove();
+        }
+      }
+      const test2FloorReadout = $('test2FloorReadout');
+      const test2BitsReadout = $('test2BitsReadout');
+      if(test2FloorReadout) test2FloorReadout.textContent = PKM_RUN.extraPassage ? 'PASSAGGIO' : `PIANO ${PKM_RUN.floor || 1}`;
+      if(test2BitsReadout) test2BitsReadout.textContent = Number(PKM_RUN.bits) || 0;
+      const formation = $('test2FormationLine');
+      const slots = PKM_RUN.teamSlots || [];
+      const roster = [
+        { pokemon:slots[0], slotIndex:2, label:'COMP. 1' },
+        { pokemon:slots[1], slotIndex:3, label:'COMP. 2' },
+        { pokemon:PKM_RUN.activePokemon, slotIndex:0, label:'STARTER 1' },
+        { pokemon:PKM_RUN.secondActive, slotIndex:1, label:'STARTER 2' }
+      ];
+      if(formation){
+        formation.innerHTML = roster.map(({pokemon, slotIndex, label}, index) => {
+          if(!pokemon) return '';
+          const maxHp = Math.max(1, Number(pokemon.maxHp) || 1);
+          const hp = clamp(Number(pokemon.hp) || 0, 0, maxHp);
+          const hpPercent = Math.round(hp / maxHp * 100);
+          return `<button type="button" class="bottom-campagna-member member-${index} ${index >= 2 ? 'starter' : 'ally'} ${index < 2 ? 'test2-reserve' : ''} ${hp <= 0 ? 'dead' : ''}" draggable="true" onclick="PokeMisteryRL.UI.openTestBottomPokemon(${slotIndex})" ondragstart="PokeMisteryRL.UI.dragTestBottomPokemon(event,${slotIndex})" ondragover="PokeMisteryRL.UI.allowTestBottomDrop(event)" ondrop="PokeMisteryRL.UI.dropTestBottomPokemon(event,${slotIndex})" title="${pokemon.nome}">
+            <span class="bottom-campagna-types" aria-label="Tipi di ${pokemon.nome}">${bottomTypeBadges(pokemon)}</span>
+            <img src="${sprite(pokemon.immagine)}" alt="${pokemon.nome}">
+            <span class="sr-only">${label} · ${pokemon.nome} · ${hpPercent}% vita</span>${index >= 2 ? `<i class="bottom-campagna-hp"><b style="width:${hpPercent}%"></b></i>` : ""}
+          </button>`;
+        }).join('');
+        // Coordinate prioritarie dello Starter nella scena Test2.
+        const starterCard = formation.querySelector('.member-2');
+        starterCard?.querySelector('.bottom-campagna-hp')?.style.setProperty('top', '4px', 'important');
+        starterCard?.querySelector('.bottom-campagna-hp')?.style.setProperty('bottom', 'auto', 'important');
+        starterCard?.querySelector('.bottom-campagna-types')?.style.setProperty('top', '13px', 'important');
+        starterCard?.querySelector('.bottom-campagna-types')?.style.setProperty('bottom', 'auto', 'important');
+        starterCard?.querySelector('.bottom-campagna-types')?.style.setProperty('right', 'auto', 'important');
+        starterCard?.querySelector('.bottom-campagna-types')?.style.setProperty('width', 'max-content', 'important');
+      }
       return;
     }
 
@@ -5321,6 +5650,15 @@ PokeMisteryRL.UI = (() => {
       return;
     }
 
+    map.classList.toggle("test2-horizontal-map", isTest2Mode());
+    if(isTest2Mode()){
+      map.style.removeProperty("--test2-map-shift");
+      map.dataset.test2Phase = String(Number(PKM_RUN.test2MapPhase) || 0);
+    } else {
+      map.style.removeProperty("--test2-map-shift");
+      delete map.dataset.test2Phase;
+    }
+
 
     map.replaceChildren();
 
@@ -5346,7 +5684,21 @@ PokeMisteryRL.UI = (() => {
     };
 
 
-    PKM_RUN.map.forEach(row => {
+    // Coordinate esplicite della mappa orizzontale Test2: ogni riga del DB
+    // corrisponde a una colonna sullo schermo, con inizio e boss al centro.
+    const test2MapY = {
+      1: [50],
+      2: [36, 64],
+      3: [20, 50, 80]
+    };
+    const test2MapX = [15, 50, 85];
+    const test2VisibleStart = isTest2Mode() && Number(PKM_RUN.test2MapPhase) === 2 ? 2 : 0;
+    const rowsToRender = isTest2Mode()
+      ? PKM_RUN.map.slice(test2VisibleStart, test2VisibleStart + 3)
+      : PKM_RUN.map;
+
+    rowsToRender.forEach((row, visibleRowIndex) => {
+      const rowIndex = Number(row?.[0]?.row) || 0;
 
       const rowEl =
         document.createElement(
@@ -5356,6 +5708,12 @@ PokeMisteryRL.UI = (() => {
 
       rowEl.className =
         "map-row";
+
+      if(isTest2Mode()){
+        // I nodi vengono posizionati direttamente rispetto alla mappa;
+        // la riga non deve quindi avere una propria altezza.
+        rowEl.style.setProperty("display", "contents", "important");
+      }
 
 
 
@@ -5410,6 +5768,14 @@ PokeMisteryRL.UI = (() => {
 
         el.className =
           cn;
+
+        if(isTest2Mode()){
+          const top = test2MapY[row.length]?.[node.col] ?? 50;
+          el.style.setProperty("position", "absolute", "important");
+          el.style.setProperty("left", `${test2MapX[visibleRowIndex] ?? 50}%`, "important");
+          el.style.setProperty("top", `${top}%`, "important");
+          el.style.setProperty("transform", "translate(-50%, -50%)", "important");
+        }
 
 
         /*
@@ -5647,6 +6013,22 @@ PokeMisteryRL.UI = (() => {
           `HP ${s2Current}/${s2Max}`;
       }
 
+    }
+
+    if(isTest2Mode()){
+      [s1, s2].forEach((pokemon, index) => {
+        const bar = $(`test2ArenaPlayer${index}Hp`);
+        if(!bar || !pokemon) return;
+        const maxHp = Math.max(1, Number(pokemon.maxHp) || 1);
+        const hp = clamp(Number(pokemon.hp) || 0, 0, maxHp);
+        bar.style.width = `${hp / maxHp * 100}%`;
+        document.querySelector(`[data-battle-player="${index}"]`)
+          ?.classList.toggle("dead", hp <= 0);
+      });
+      (battle.enemies || []).forEach((foe, index) => {
+        document.querySelector(`#bottomCampagna [data-battle-enemy="${index}"]`)
+          ?.classList.toggle("dead", Number(foe?.hp) <= 0);
+      });
     }
 
     // In Test la formazione completa resta sempre leggibile nella battle HUD.
@@ -5933,6 +6315,23 @@ PokeMisteryRL.UI = (() => {
       `;
     };
 
+  // Test2: il bottom rimane invariato e aggiunge solo gli avversari a destra.
+  const buildTest2ArenaTemplate = () => {
+    const battle = PKM_RUN?.battle;
+    const players = [
+      { pokemon:PKM_RUN?.activePokemon, playerIndex:0, slot:2 },
+      { pokemon:PKM_RUN?.secondActive, playerIndex:1, slot:3 }
+    ];
+    const enemies = Array.isArray(battle?.enemies) && battle.enemies.length
+      ? battle.enemies : [battle?.enemy].filter(Boolean);
+    return `<div id="bottomCampagna" class="bottom-campagna test2-fight-bottom" data-scene="${getTest2BottomScene()}"><div class="bottom-campagna-formation">${players.map(({pokemon, playerIndex, slot}) => {
+      if(!pokemon) return "";
+      const maxHp = Math.max(1, Number(pokemon.maxHp) || 1);
+      const hpPercent = clamp((Number(pokemon.hp) || 0) / maxHp * 100, 0, 100);
+      return `<div class="bottom-campagna-member member-${slot} ${slot >= 2 ? "starter" : "ally"} ${Number(pokemon.hp) <= 0 ? "dead" : ""}" data-battle-player="${playerIndex}"><span class="bottom-campagna-types" aria-label="Tipi di ${pokemon.nome}">${bottomTypeBadges(pokemon)}</span><img src="${sprite(pokemon.immagine)}" alt="${pokemon.nome}">${slot >= 2 ? `<i class="bottom-campagna-hp"><b id="test2ArenaPlayer${playerIndex}Hp" style="width:${hpPercent}%"></b></i>` : ""}</div>`;
+    }).join("")}</div><div class="test2-enemy-formation">${enemies.map((pokemon, index) => `<div class="test2-enemy-sprite enemy-${index} ${Number(pokemon.hp) <= 0 ? "dead" : ""}" data-battle-enemy="${index}"><span class="bottom-campagna-types" aria-label="Tipi di ${pokemon.nome}">${bottomTypeBadges(pokemon)}</span><img src="${sprite(pokemon.immagine)}" alt="${pokemon.nome}"></div>`).join("")}</div>${buildTest2UtilityBar()}</div>`;
+  };
+
 
   const hitShake = (target) => {
 
@@ -5942,21 +6341,18 @@ PokeMisteryRL.UI = (() => {
     if(/^player-\d+$/.test(String(target))){
       selector = `[data-battle-player="${String(target).split("-")[1]}"]`;
     } else if (target === "enemy2") {
-      selector = ".bf-sprite.enemy2";
+      selector = isTest2Mode() ? "#bottomCampagna [data-battle-enemy=\"1\"]" : ".bf-sprite.enemy2";
     } else if (target === "enemy") {
 
-      selector =
-        ".bf-sprite.enemy";
+      selector = isTest2Mode() ? "#bottomCampagna [data-battle-enemy=\"0\"]" : ".bf-sprite.enemy";
 
     } else if (target === "s2") {
 
-      selector =
-        ".bf-sprite.s2";
+      selector = isTest2Mode() ? "[data-battle-player=\"1\"]" : ".bf-sprite.s2";
 
     } else {
 
-      selector =
-        ".bf-sprite.s1";
+      selector = isTest2Mode() ? "[data-battle-player=\"0\"]" : ".bf-sprite.s1";
     }
 
 
@@ -6020,21 +6416,18 @@ PokeMisteryRL.UI = (() => {
       if(/^player-\d+$/.test(String(target))){
         selector = `[data-battle-player="${String(target).split("-")[1]}"]`;
       } else if (target === "enemy2") {
-        selector = ".bf-sprite.enemy2";
+        selector = isTest2Mode() ? "#bottomCampagna [data-battle-enemy=\"1\"]" : ".bf-sprite.enemy2";
       } else if (target === "enemy") {
 
-        selector =
-          ".bf-sprite.enemy";
+        selector = isTest2Mode() ? "#bottomCampagna [data-battle-enemy=\"0\"]" : ".bf-sprite.enemy";
 
       } else if (target === "s2") {
 
-        selector =
-          ".bf-sprite.s2";
+        selector = isTest2Mode() ? "[data-battle-player=\"1\"]" : ".bf-sprite.s2";
 
       } else {
 
-        selector =
-          ".bf-sprite.s1";
+        selector = isTest2Mode() ? "[data-battle-player=\"0\"]" : ".bf-sprite.s1";
       }
 
 
@@ -6350,7 +6743,7 @@ PokeMisteryRL.UI = (() => {
     refreshBottomPanel();
     if(PKM_RUN?.battle){
       const resumeAfterDrop = !!PKM_RUN.battle.formationPending;
-      modal(PokeMisteryRL.UI.buildBattleTemplate(!!PKM_RUN.battle.boss, PKM_RUN.floor));
+      showBattleSurface(PokeMisteryRL.UI.buildBattleTemplate(!!PKM_RUN.battle.boss, PKM_RUN.floor));
       PokeMisteryRL.UI.updateBattleHP();
       if(resumeAfterDrop) setTimeout(() => window.resumeBattleAfterFormation?.(), 80);
     }
@@ -6368,6 +6761,8 @@ PokeMisteryRL.UI = (() => {
     updateBattleHP,
 
     buildBattleTemplate,
+
+    buildTest2ArenaTemplate,
 
     hitShake,
 
@@ -6989,7 +7384,7 @@ const shop = () => {
     theftAttempts === 2 ? "Kecleon ti osserva...  ... ..." :
     "Kecleon pare scocciato";
 
-  while(!PKM_RUN.kecleonDefeated && pool.length && offers.length < 9){
+  while(!PKM_RUN.kecleonDefeated && pool.length && offers.length < 8){
     const index =
       Math.floor(Math.random() * pool.length);
 
@@ -7006,6 +7401,24 @@ const shop = () => {
 
   if(!PKM_RUN.kecleonDefeated){
     PKM_RUN.lastShopOffers = offers.map(({item, price}) => ({ id:item.id, price }));
+  }
+
+  // Test2: Kecleon entra nella scena; gli scaffali sostituiscono la mappa.
+  if(isTest2Mode()){
+    const bottom = $("bottomCampagna");
+    const map = $("map");
+    if(bottom){
+      bottom.querySelector(".test2-shop-kecleon")?.remove();
+      bottom.querySelector(".test2-kecleon-bubble")?.remove();
+      bottom.insertAdjacentHTML("beforeend", `<img class="test2-shop-kecleon" src="${sprite("kecleon.png")}" alt="Kecleon">`);
+      const warning = theftAttempts ? ["Ehi! Quello è mio!", "Ti sto osservando…", "Ultimo avvertimento!"][Math.min(2,theftAttempts - 1)] : "";
+      if(warning) bottom.insertAdjacentHTML("beforeend", `<span class="test2-kecleon-bubble">${warning}</span>`);
+    }
+    if(map){
+      map.classList.add("test2-shop-map");
+      map.innerHTML = `<div class="test2-shop-grid">${offers.map(({item,price}) => `<button type="button" class="test2-shop-item" onclick="openShopItemDetail('${String(item.id).replace(/'/g,"\\'")}',${price})"><img src="${item.immagine || ""}" alt="${item.nome || item.id}"><b>${item.nome || item.id}</b></button>`).join("")}</div><button type="button" class="test2-shop-exit" onclick="next('Negozio visitato')">ESCI</button>`;
+    }
+    return;
   }
 
   const abandonedShop = !!PKM_RUN.kecleonDefeated;
@@ -7051,6 +7464,16 @@ const openShopItemDetail = (itemId, price) => {
   const effect = item.tipo === "potenziamento_tipo"
     ? `DMG ${getTypingBadge(item.tipo_mossa)} <b>×${(1 + (Number(item.bonus_danno) || 0)).toFixed(2)}</b>`
     : (item.effetto || "Nessuna descrizione.");
+  if(isTest2Mode()){
+    const map = $("map");
+    if(map){
+      map.querySelector(".test2-shop-grid")?.classList.add("is-blurred");
+      map.querySelector(".test2-shop-exit")?.classList.add("is-blurred");
+      map.querySelector(".test2-shop-detail")?.remove();
+      map.insertAdjacentHTML("beforeend", `<div class="test2-shop-detail">${item.immagine ? `<img src="${item.immagine}" alt="${item.nome}">` : "◈"}<h2>${item.nome}</h2><p>${effect}</p><b>💰 ${price}</b><div><button onclick="buyShopItem('${String(item.id).replace(/'/g,"\\'")}',${price})">${PKM_RUN?.kecleonDefeated ? "PRENDI" : "COMPRA"}</button>${PKM_RUN?.kecleonDefeated ? "" : `<button onclick="stealShopItem('${String(item.id).replace(/'/g,"\\'")}')">RUBA</button>`}</div><button onclick="shop()">← SCAFFALI</button></div>`);
+    }
+    return true;
+  }
   modal(`<div class="center shop-item-modal"><small class="shop-item-kicker">DETTAGLI OGGETTO</small><div class="shop-item-modal-icon">${item.immagine ? `<img src="${item.immagine}" alt="${item.nome}">` : "◈"}</div><h2>${item.nome}</h2><p>${effect}</p><div class="shop-item-cost"><span>PREZZO</span><b>💰 ${price}</b></div><div class="shop-actions"><button type="button" onclick="buyShopItem('${String(item.id).replace(/'/g,"\\'")}',${price})">${PKM_RUN?.kecleonDefeated ? "PRENDI" : "COMPRA"}</button>${PKM_RUN?.kecleonDefeated ? "" : `<button type="button" class="shop-steal-btn" onclick="stealShopItem('${String(item.id).replace(/'/g,"\\'")}')">RUBA</button>`}</div><button type="button" onclick="shop()">← TORNA AGLI SCAFFALI</button></div>`);
   return true;
 };
@@ -7179,6 +7602,8 @@ window.releaseSecond = releaseSecond;
 window.openSecondPreview = openSecondPreview;
 document.addEventListener("DOMContentLoaded", () => {
   buildPokemonDB();
+  // Non blocca la schermata iniziale: i dati canonici arrivano live da PokéAPI.
+  PokeMisteryRL.Database.loadPokeApiLiveDatabase();
   $("menu")?.classList.remove("hidden");
   console.log(`PokeMisteryRL Core v8.1 - ${Object.keys(PKM_DB).length} Pokémon - MODULAR`);
 });

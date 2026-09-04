@@ -140,6 +140,13 @@ window.PokeMisteryRL_Modes.DB_MODES.test.nome = "Test";
 window.PokeMisteryRL_Modes.DB_MODES.test.descrizione = "Modalità Test: stessa mappa della Campagna Kanto.";
 window.PokeMisteryRL_Modes.DB_MODES.test.tipo = "campagna";
 window.PokeMisteryRL_Modes.DB_MODES.test.famiglia = "campagne";
+// Sandbox visivo indipendente: usa la stessa base tecnica, ma con HUD propria.
+window.PokeMisteryRL_Modes.DB_MODES.test2 = JSON.parse(JSON.stringify(
+  window.PokeMisteryRL_Modes.DB_MODES.test
+));
+window.PokeMisteryRL_Modes.DB_MODES.test2.id = "test2";
+window.PokeMisteryRL_Modes.DB_MODES.test2.nome = "Test2";
+window.PokeMisteryRL_Modes.DB_MODES.test2.descrizione = "Sandbox per provare la nuova schermata della squadra.";
 // Curva Test: quattro Pokémon iniziali e sinergie richiedono incontri più alti,
 // ma Partner e Starter crescono entrambi in modo affidabile.
 [
@@ -149,9 +156,13 @@ window.PokeMisteryRL_Modes.DB_MODES.test.famiglia = "campagne";
   const floor = window.PokeMisteryRL_Modes.DB_MODES.test.piani[index];
   floor.livelli = { min, max:min };
   floor.bossLevel = bossLevel;
+  const test2Floor = window.PokeMisteryRL_Modes.DB_MODES.test2.piani[index];
+  test2Floor.livelli = { min, max:min };
+  test2Floor.bossLevel = bossLevel;
 });
 window.PokeMisteryRL_Modes.DB_MODES.campagne.campagne = [
-  { id:"test", nome:"Test", descrizione:"Replica della campagna Kanto per testare le regole Campagne.", disponibile:true }
+  { id:"test", nome:"Test", descrizione:"Replica della campagna Kanto per testare le regole Campagne.", disponibile:true },
+  { id:"test2", nome:"Test2", descrizione:"Sandbox della nuova schermata squadra.", disponibile:true }
 ];
 
 window.PokeMisteryRL_Modes.get = function(modeId){
